@@ -161,6 +161,8 @@ const I18N = {
     voice_connected: 'Voice connected',
     voice_no_mic: 'Microphone unavailable',
     voice_not_ready: 'Voice chat not ready',
+    view_lobby: 'View lobby',
+    return_to_game: 'Return to game',
     create_match_failed: 'Could not create a new match.',
     already_have_active_match: 'You already have an active match.',
     private_match: 'Private match (hidden from lobby)',

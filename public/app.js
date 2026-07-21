@@ -338,6 +338,17 @@ function requestRematch() {
   send(C2S.REQUEST_REMATCH, { matchId: state.currentMatchId });
 }
 
+function goToLobby() {
+  state.view = 'lobby';
+  render();
+}
+
+function returnToMatch() {
+  if (!state.currentMatchId) return;
+  state.view = 'match';
+  render();
+}
+
 function declineRematch() {
   const confirmed = window.confirm(tr('confirm_decline_rematch')); 
   if (!confirmed) return;
@@ -449,7 +460,10 @@ function renderLobby() {
 
   root.innerHTML = `
     <div class="panel">
-      <h2>${tr('create_match')}</h2>
+      <div class="lobby-panel-header">
+        <h2>${tr('create_match')}</h2>
+        ${state.currentMatchId ? `<button type="button" class="pill-button" id="return-to-game-btn">${tr('return_to_game')}</button>` : ''}
+      </div>
       <div class="mode-buttons">
         <button type="button" data-create="standard" ${state.snapshot && state.snapshot.status !== 'finished' && state.snapshot.yourSeat && state.snapshot.yourSeat !== 'spectator' ? 'disabled' : ''}>${tr('mode_standard')}</button>
         <button type="button" data-create="diagonal" ${state.snapshot && state.snapshot.status !== 'finished' && state.snapshot.yourSeat && state.snapshot.yourSeat !== 'spectator' ? 'disabled' : ''}>${tr('mode_diagonal')}</button>
@@ -498,6 +512,8 @@ function renderLobby() {
   }
   const joinByIdBtn = document.getElementById('join-match-id-btn');
   const joinByIdInput = document.getElementById('join-match-id');
+  const returnToGameBtn = document.getElementById('return-to-game-btn');
+  if (returnToGameBtn) returnToGameBtn.addEventListener('click', returnToMatch);
   if (joinByIdBtn && joinByIdInput) {
     joinByIdInput.addEventListener('input', () => {
       state.privateMatchId = joinByIdInput.value;
@@ -613,7 +629,7 @@ function renderMatch() {
   root.innerHTML = `
     ${!state.ws ? `<div class="connection-banner">${tr('connection_lost')}</div>` : ''}
     <div class="match-header">
-      <button type="button" class="link-button" id="back-to-lobby">${tr('back_to_lobby')}</button>
+      <button type="button" class="link-button" id="view-lobby-btn">${tr('view_lobby')}</button>
       <span class="spectator-count">${snap.spectatorCount} ${tr('spectators')}</span>
     </div>
     <div class="status-bar">
@@ -651,7 +667,8 @@ function renderMatch() {
       </div>`}
   `;
 
-  document.getElementById('back-to-lobby').addEventListener('click', leaveMatch);
+  const viewLobbyBtn = document.getElementById('view-lobby-btn');
+  if (viewLobbyBtn) viewLobbyBtn.addEventListener('click', goToLobby);
   const leaveBtn = document.getElementById('leave-btn') || document.getElementById('leave-btn-2');
   if (leaveBtn) leaveBtn.addEventListener('click', leaveMatch);
   const rematchBtn = document.getElementById('rematch-btn');

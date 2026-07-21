@@ -277,6 +277,14 @@ function requestRematch() {
   send(C2S.REQUEST_REMATCH, { matchId: state.currentMatchId });
 }
 
+function declineRematch() {
+  const confirmed = window.confirm(tr('confirm_decline_rematch')); 
+  if (!confirmed) return;
+  send(C2S.DECLINE_REMATCH, { matchId: state.currentMatchId });
+  state.rematchProposalBy = null;
+  render();
+}
+
 function onPointActivate(position) {
   const snap = state.snapshot;
   if (!snap || snap.status !== 'live' || snap.yourSeat === 'spectator' || !snap.yourSeat) return;
@@ -596,6 +604,7 @@ function renderMatch() {
   const declineRematchBtn = document.getElementById('decline-rematch-btn');
   if (declineRematchBtn) {
     declineRematchBtn.addEventListener('click', () => {
+      declineRematchBtn.disabled = true;
       declineRematch();
     });
   }

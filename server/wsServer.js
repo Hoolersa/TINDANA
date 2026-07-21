@@ -157,14 +157,15 @@ app.post('/api/matches', (req, res) => {
   const session = requireSession(req, res);
   if (!session) return;
   const mode = req.body?.mode === 'diagonal' ? 'diagonal' : 'standard';
-  const match = matchManager.createMatch(mode, session.sessionId, session.nickname);
+  const isPrivate = req.body?.private === true || req.body?.private === 'true';
+  const match = matchManager.createMatch(mode, session.sessionId, session.nickname, isPrivate);
   wireMatchEvents(match);
   // Register the routing mapping now rather than waiting for the client's
   // follow-up WS JOIN_MATCH - if that message is ever lost in transit, the
   // host's later disconnect would otherwise never be routed to this match.
   socketMatch.set(session.sessionId, match.id);
   broadcastLobby();
-  res.json({ matchId: match.id });
+  res.json({ matchId: match.id, private: isPrivate, passKey: match.passKey });
 });
 
 function parseSessionCookie(req) {

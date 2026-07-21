@@ -37,6 +37,11 @@ function createMessageRouter({ matchManager, chatManager, broadcastChat, sendToS
       case C2S.JOIN_MATCH: {
         const match = matchManager.getMatch(msg.matchId);
         if (!match) return sendToSession(sessionId, err(ERROR_CODES.MATCH_NOT_FOUND));
+        if (match.private && !match.seatForSession(sessionId)) {
+          if (!msg.passKey || msg.passKey !== match.passKey) {
+            return sendToSession(sessionId, err(ERROR_CODES.INVALID_PASSKEY, 'Invalid pass key'));
+          }
+        }
         try {
           if (msg.as === 'player') {
             match.joinAsPlayer(sessionId, getNickname(sessionId));
@@ -104,7 +109,41 @@ function createMessageRouter({ matchManager, chatManager, broadcastChat, sendToS
       case C2S.REQUEST_REMATCH: {
         const match = matchManager.getMatch(msg.matchId);
         if (!match) return sendToSession(sessionId, err(ERROR_CODES.MATCH_NOT_FOUND));
-        match.requestRematch(sessionId);
+        try {
+          const bothWant = match.requestRematch(sessionId);
+          if (!bothWant) {
+            const otherSessionId = match.otherPlayerSessionId(sessionId);
+            if (otherSessionId) {
+              sendToSession(otherSessionId, {
+                type: S2C.REMATCH_PROPOSED,
+                by: getNickname(sessionId),
+              });
+            }
+          }
+        } catch (e) {
+          if (e.name === 'NotAPlayerError') return sendToSession(sessionId, err(ERROR_CODES.NOT_A_PLAYER));
+          throw e;
+        }
+        return;
+      }
+      case C2S.DECLINE_REMATCH: {
+        const match = matchManager.getMatch(msg.matchId);
+        if (!match) return sendToSession(sessionId, err(ERROR_CODES.MATCH_NOT_FOUND));
+        try {
+          const declined = match.declineRematch(sessionId);
+          if (declined) {
+            const otherSessionId = match.otherPlayerSessionId(sessionId);
+            if (otherSessionId) {
+              sendToSession(otherSessionId, {
+                type: S2C.REMATCH_DECLINED,
+                by: getNickname(sessionId),
+              });
+            }
+          }
+        } catch (e) {
+          if (e.name === 'NotAPlayerError') return sendToSession(sessionId, err(ERROR_CODES.NOT_A_PLAYER));
+          throw e;
+        }
         return;
       }
       case C2S.LEAVE_MATCH: {

@@ -8,6 +8,7 @@ const C2S = Object.freeze({
   REQUEST_SNAPSHOT: 'request_snapshot', // { matchId } - used after reconnect
   LEAVE_MATCH: 'leave_match', // { matchId }
   REQUEST_REMATCH: 'request_rematch', // { matchId }
+  DECLINE_REMATCH: 'decline_rematch', // { matchId }
   SEND_CHAT: 'send_chat', // { text }
   REPORT_CHAT: 'report_chat', // { messageId }
 });
@@ -19,6 +20,8 @@ const S2C = Object.freeze({
   MATCH_ENDED: 'match_ended', // { winner, drawn, reason }
   OPPONENT_DISCONNECTED: 'opponent_disconnected', // { graceMsRemaining }
   OPPONENT_RECONNECTED: 'opponent_reconnected', // {}
+  REMATCH_PROPOSED: 'rematch_proposed', // { by }
+  REMATCH_DECLINED: 'rematch_declined', // { by }
   REMATCH_OFFERED: 'rematch_offered', // { newMatchId }
   LOBBY_UPDATE: 'lobby_update', // { matches: [...] }
   CHAT_MESSAGE: 'chat_message', // { message }
@@ -41,6 +44,7 @@ const ERROR_CODES = Object.freeze({
   NOT_YOUR_TURN: 'not_your_turn',
   ILLEGAL_ACTION: 'illegal_action',
   NOT_A_PLAYER: 'not_a_player',
+  INVALID_PASSKEY: 'invalid_passkey',
   MATCH_NOT_FOUND: 'match_not_found',
   MATCH_FULL: 'match_full',
   MATCH_OVER: 'match_over',

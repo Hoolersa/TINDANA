@@ -9,6 +9,7 @@ const C2S = {
   REQUEST_SNAPSHOT: 'request_snapshot',
   LEAVE_MATCH: 'leave_match',
   REQUEST_REMATCH: 'request_rematch',
+  DECLINE_REMATCH: 'decline_rematch',
   SEND_CHAT: 'send_chat',
   REPORT_CHAT: 'report_chat',
 };
@@ -18,6 +19,8 @@ const S2C = {
   MATCH_ENDED: 'match_ended',
   OPPONENT_DISCONNECTED: 'opponent_disconnected',
   OPPONENT_RECONNECTED: 'opponent_reconnected',
+  REMATCH_PROPOSED: 'rematch_proposed',
+  REMATCH_DECLINED: 'rematch_declined',
   REMATCH_OFFERED: 'rematch_offered',
   LOBBY_UPDATE: 'lobby_update',
   CHAT_MESSAGE: 'chat_message',
@@ -38,7 +41,12 @@ const state = {
   view: 'gate', // 'gate' | 'lobby' | 'match'
   lobbyMatches: [],
   currentMatchId: localStorage.getItem(MATCH_KEY) || null,
+  createPrivateMatch: false,
+  privateMatchId: '',
+  lastPrivateMatchPassKey: null,
   snapshot: null, // last MATCH_SNAPSHOT
+  rematchProposalBy: null,
+  rematchDeclinedBy: null,
   selectedFrom: null, // move-phase: bead currently selected for a move
   opponentDisconnectNotice: false,
   lastError: null,
@@ -191,7 +199,19 @@ function handleServerMessage(msg) {
       announce(tr('opponent_reconnected'));
       render();
       return;
+    case S2C.REMATCH_PROPOSED:
+      state.rematchProposalBy = msg.by;
+      state.rematchDeclinedBy = null;
+      render();
+      return;
+    case S2C.REMATCH_DECLINED:
+      state.rematchDeclinedBy = msg.by;
+      state.rematchProposalBy = null;
+      render();
+      return;
     case S2C.REMATCH_OFFERED:
+      state.rematchProposalBy = null;
+      state.rematchDeclinedBy = null;
       send(C2S.REQUEST_SNAPSHOT, { matchId: msg.newMatchId });
       return;
     default:
@@ -213,21 +233,41 @@ async function createMatch(mode) {
   const res = await fetch('/api/matches', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify({ mode, private: state.createPrivateMatch }),
     credentials: 'same-origin',
   });
   const data = await res.json();
+  state.lastPrivateMatchPassKey = data.passKey || null;
   joinMatch(data.matchId, 'player');
 }
 
-function joinMatch(matchId, as) {
-  send(C2S.JOIN_MATCH, { matchId, as });
+function joinMatch(matchId, as, passKey) {
+  send(C2S.JOIN_MATCH, { matchId, as, passKey });
+}
+
+function requestPrivateJoin(matchId, as) {
+  const passKey = window.prompt(tr('enter_private_match_passkey'));
+  if (passKey === null) return;
+  joinMatch(matchId, as, passKey.trim());
+}
+
+function joinMatchById() {
+  const matchId = state.privateMatchId.trim();
+  if (!matchId) return;
+  const passKey = window.prompt(tr('enter_private_match_passkey'));
+  if (passKey === null) return;
+  state.privateMatchId = '';
+  render();
+  joinMatch(matchId, 'player', passKey.trim());
 }
 
 function leaveMatch() {
   if (state.currentMatchId) send(C2S.LEAVE_MATCH, { matchId: state.currentMatchId });
   state.currentMatchId = null;
   state.snapshot = null;
+  state.lastPrivateMatchPassKey = null;
+  state.rematchProposalBy = null;
+  state.rematchDeclinedBy = null;
   localStorage.removeItem(MATCH_KEY);
   state.view = 'lobby';
   refreshLobbyOnce().then(render);
@@ -316,14 +356,18 @@ function matchCard(m) {
   const actionLabel = m.status === 'waiting' ? tr('join_seat') : tr('watch');
   const action = m.status === 'waiting' ? 'join' : 'watch';
   const names = [m.players.A, m.players.B].filter(Boolean).join(' vs ');
+  const badge = m.private ? `<span class="match-badge">${tr('private_label')}</span>` : '';
+  const actionButton = m.status !== 'finished'
+    ? `<button data-match="${m.matchId}" data-action="${action}" data-private="${m.private}">${actionLabel}</button>`
+    : '';
   return `
     <div class="match-card">
       <div>
-        <div class="who">${names || tr('waiting_matches')}</div>
+        <div class="who">${names || tr('waiting_matches')} ${badge}</div>
         <div class="meta">${m.mode === 'diagonal' ? tr('mode_diagonal') : tr('mode_standard')}
           ${m.spectatorCount ? ` · ${m.spectatorCount} ${tr('spectators')}` : ''}</div>
       </div>
-      ${m.status !== 'finished' ? `<button data-match="${m.matchId}" data-action="${action}">${actionLabel}</button>` : ''}
+      ${actionButton}
     </div>
   `;
 }
@@ -340,6 +384,19 @@ function renderLobby() {
         <button type="button" data-create="standard">${tr('mode_standard')}</button>
         <button type="button" data-create="diagonal">${tr('mode_diagonal')}</button>
       </div>
+      <label class="private-match-toggle">
+        <input id="private-match-checkbox" type="checkbox" ${state.createPrivateMatch ? 'checked' : ''}>
+        ${tr('private_match')}
+      </label>
+      <div class="private-join">
+        <input id="join-match-id" type="text" maxlength="40"
+               placeholder="${tr('join_private_match_id_placeholder')}"
+               title="${tr('private_match_id_tooltip')}"
+               value="${escapeHtml(state.privateMatchId)}" />
+        <button type="button" id="join-match-id-btn">${tr('join_private_match_by_id')}</button>
+      </div>
+      ${state.lastPrivateMatchPassKey ? `<div class="private-passkey-note">${tr('private_match_created_key', { key: escapeHtml(state.lastPrivateMatchPassKey) })}</div>` : ''}
+      <div class="private-join-help">${tr('private_match_help_text')}</div>
     </div>
     <div class="panel lobby-grid">
       <div class="match-column">
@@ -363,8 +420,36 @@ function renderLobby() {
   root.querySelectorAll('[data-create]').forEach((btn) => {
     btn.addEventListener('click', () => createMatch(btn.dataset.create));
   });
+  const privateCheckbox = document.getElementById('private-match-checkbox');
+  if (privateCheckbox) {
+    privateCheckbox.addEventListener('change', () => {
+      state.createPrivateMatch = privateCheckbox.checked;
+    });
+  }
+  const joinByIdBtn = document.getElementById('join-match-id-btn');
+  const joinByIdInput = document.getElementById('join-match-id');
+  if (joinByIdBtn && joinByIdInput) {
+    joinByIdInput.addEventListener('input', () => {
+      state.privateMatchId = joinByIdInput.value;
+    });
+    joinByIdBtn.addEventListener('click', joinMatchById);
+    joinByIdInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        joinMatchById();
+      }
+    });
+  }
   root.querySelectorAll('[data-action]').forEach((btn) => {
-    btn.addEventListener('click', () => joinMatch(btn.dataset.match, btn.dataset.action === 'join' ? 'player' : 'spectator'));
+    const action = btn.dataset.action === 'join' ? 'player' : 'spectator';
+    const needsPassKey = btn.dataset.private === 'true';
+    btn.addEventListener('click', () => {
+      if (needsPassKey) {
+        requestPrivateJoin(btn.dataset.match, action);
+      } else {
+        joinMatch(btn.dataset.match, action);
+      }
+    });
   });
   attachChatHandlers();
 }
@@ -473,6 +558,13 @@ function renderMatch() {
     </div>
     <div class="status-text" id="status-text">${statusText(snap)}</div>
     ${resultBannerHTML(snap)}
+    ${state.rematchDeclinedBy ? `<div class="rematch-notice">${tr('rematch_declined_by', { name: state.rematchDeclinedBy })}</div>` : ''}
+    ${state.rematchProposalBy ? `
+      <div class="rematch-proposal">
+        <p>${tr('rematch_proposed_by', { name: state.rematchProposalBy })}</p>
+        <button type="button" class="accept-rematch-btn" id="accept-rematch-btn">${tr('rematch_accept')}</button>
+        <button type="button" class="decline-rematch-btn" id="decline-rematch-btn">${tr('rematch_decline')}</button>
+      </div>` : ''}
     <div class="board-wrap">${renderBoardHTML(snap)}</div>
     ${renderChatPanel()}
     ${isFinished && isPlayer ? `
@@ -494,6 +586,19 @@ function renderMatch() {
     rematchBtn.disabled = true;
     rematchBtn.textContent = tr('rematch_waiting');
   });
+
+  const acceptRematchBtn = document.getElementById('accept-rematch-btn');
+  if (acceptRematchBtn) {
+    acceptRematchBtn.addEventListener('click', () => {
+      requestRematch();
+    });
+  }
+  const declineRematchBtn = document.getElementById('decline-rematch-btn');
+  if (declineRematchBtn) {
+    declineRematchBtn.addEventListener('click', () => {
+      declineRematch();
+    });
+  }
 
   root.querySelectorAll('.board-point').forEach((btn) => {
     btn.addEventListener('click', () => onPointActivate(Number(btn.dataset.pos)));

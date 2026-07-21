@@ -5,7 +5,7 @@
   "main": "server/wsServer.js",
   "scripts": {
     "start": "node server/wsServer.js",
-    "test": "node test/gameEngine.test.js && node test/integration.test.js"
+    "test": "node test/gameEngine.test.js && node test/integration.test.js && node test/privateMatch.test.js"
   },
   "engines": {
     "node": ">=18"

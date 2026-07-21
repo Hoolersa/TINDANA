@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const engine = require('../engine/gameEngine');
 const { TURN_DURATION_MS, RECONNECT_GRACE_MS } = require('./protocol');
@@ -13,10 +14,12 @@ class IllegalActionError extends Error {
   }
 }
 
-let matchCounter = 0;
+function generatePassKey() {
+  return crypto.randomBytes(3).toString('hex').toUpperCase();
+}
+
 function generateMatchId() {
-  matchCounter += 1;
-  return `m${Date.now().toString(36)}${matchCounter.toString(36)}`;
+  return `m-${crypto.randomBytes(8).toString('hex')}`;
 }
 
 /**
@@ -34,12 +37,14 @@ function generateMatchId() {
  *   'rematchReady'         - both seated players requested a rematch
  */
 class Match extends EventEmitter {
-  constructor({ id, scheduler, rng = Math.random, hostSessionId, hostNickname, mode = 'standard' }) {
+  constructor({ id, scheduler, rng = Math.random, hostSessionId, hostNickname, mode = 'standard', isPrivate = false }) {
     super();
     this.id = id || generateMatchId();
     this.scheduler = scheduler;
     this.rng = rng;
     this.mode = mode === 'diagonal' ? 'diagonal' : 'standard';
+    this.private = !!isPrivate;
+    this.passKey = this.private ? generatePassKey() : null;
 
     this.status = 'waiting'; // 'waiting' | 'live' | 'finished'
     this.game = engine.createGame(this.mode);
@@ -146,6 +151,13 @@ class Match extends EventEmitter {
     this._afterStateMutation();
   }
 
+  otherPlayerSessionId(sessionId) {
+    const seat = this.seatForSession(sessionId);
+    if (!seat) return null;
+    const otherSeat = seat === 'A' ? 'B' : 'A';
+    return this.seats[otherSeat] ? this.seats[otherSeat].sessionId : null;
+  }
+
   requestRematch(sessionId) {
     if (this.status !== 'finished') return false;
     const seat = this.seatForSession(sessionId);
@@ -158,6 +170,15 @@ class Match extends EventEmitter {
       this.rematchRequests.has(this.seats.B.sessionId);
     if (bothWant) this.emit('rematchReady');
     return bothWant;
+  }
+
+  declineRematch(sessionId) {
+    if (this.status !== 'finished') return false;
+    const seat = this.seatForSession(sessionId);
+    if (!seat) throw new NotAPlayerError('Only seated players can decline a rematch');
+    if (this.rematchRequests.size === 0) return false;
+    this.rematchRequests.clear();
+    return true;
   }
 
   // ---------- snapshot ----------
@@ -194,6 +215,7 @@ class Match extends EventEmitter {
       matchId: this.id,
       status: this.status,
       mode: this.mode,
+      private: this.private,
       players: {
         A: this.seats.A ? this.seats.A.nickname : null,
         B: this.seats.B ? this.seats.B.nickname : null,

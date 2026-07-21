@@ -24,6 +24,7 @@ function test(name, fn) {
 function makeHarness() {
   const scheduler = createFakeScheduler();
   const inbox = new Map(); // sessionId -> array of messages received
+  const activeSessions = new Set();
   const nicknames = new Map();
   const socketMatch = new Map();
   let lobbyBroadcastCount = 0;
@@ -31,12 +32,21 @@ function makeHarness() {
   const matchManager = new MatchManager({ scheduler });
   const chatManager = new ChatManager({ now: () => 0 });
 
+  function addSession(sessionId) {
+    activeSessions.add(sessionId);
+    if (!inbox.has(sessionId)) inbox.set(sessionId, []);
+  }
+
   const router = createMessageRouter({
     matchManager,
     chatManager,
-    broadcastChat: () => {},
+    broadcastChat: (payload) => {
+      for (const sessionId of activeSessions) {
+        inbox.get(sessionId).push(payload);
+      }
+    },
     sendToSession: (sessionId, payload) => {
-      if (!inbox.has(sessionId)) inbox.set(sessionId, []);
+      addSession(sessionId);
       inbox.get(sessionId).push(payload);
     },
     getNickname: (sessionId) => nicknames.get(sessionId) || 'Guest',
@@ -44,7 +54,10 @@ function makeHarness() {
     broadcastLobby: () => { lobbyBroadcastCount += 1; },
   });
 
-  function setNickname(sessionId, nickname) { nicknames.set(sessionId, nickname); }
+  function setNickname(sessionId, nickname) {
+    nicknames.set(sessionId, nickname);
+    addSession(sessionId);
+  }
   function lastMessage(sessionId) {
     const msgs = inbox.get(sessionId);
     return msgs && msgs.length ? msgs[msgs.length - 1] : null;
@@ -174,6 +187,25 @@ test('rematch flow: match is isolated - acting on the old finished match after r
   assert.strictEqual(match.game.winner, 'B');
 });
 
+test('rematch request notifies the opponent to accept or decline', () => {
+  const h = makeHarness();
+  h.setNickname('bob', 'Bob');
+  const match = h.createAndJoinAsHost('alice', 'Alice', 'standard');
+  h.router.handleMessage('bob', { type: C2S.JOIN_MATCH, matchId: match.id, as: 'player' });
+  h.router.handleMessage('alice', { type: C2S.PLACE, matchId: match.id, position: 0 });
+  h.router.handleMessage('bob', { type: C2S.PLACE, matchId: match.id, position: 3 });
+  h.router.handleMessage('alice', { type: C2S.PLACE, matchId: match.id, position: 1 });
+  h.router.handleMessage('bob', { type: C2S.PLACE, matchId: match.id, position: 4 });
+  h.router.handleMessage('alice', { type: C2S.PLACE, matchId: match.id, position: 2 });
+
+  assert.strictEqual(match.status, 'finished');
+  h.router.handleMessage('bob', { type: C2S.REQUEST_REMATCH, matchId: match.id });
+
+  const aliceLast = h.lastMessage('alice');
+  assert.strictEqual(aliceLast.type, S2C.REMATCH_PROPOSED);
+  assert.strictEqual(aliceLast.by, 'Bob');
+});
+
 test('lobby is broadcast when a player joins a match (so waiting -> live transition is visible)', () => {
   const h = makeHarness();
   h.setNickname('bob', 'Bob');
@@ -181,6 +213,70 @@ test('lobby is broadcast when a player joins a match (so waiting -> live transit
   const before = h.getLobbyBroadcastCount();
   h.router.handleMessage('bob', { type: C2S.JOIN_MATCH, matchId: match.id, as: 'player' });
   assert.ok(h.getLobbyBroadcastCount() > before);
+});
+
+test('chat messages are broadcast to all active sessions and include history', () => {
+  const h = makeHarness();
+  h.setNickname('alice', 'Alice');
+  h.setNickname('bob', 'Bob');
+  const match = h.createAndJoinAsHost('alice', 'Alice', 'standard');
+  h.router.handleMessage('bob', { type: C2S.JOIN_MATCH, matchId: match.id, as: 'player' });
+
+  h.router.handleMessage('alice', { type: C2S.SEND_CHAT, text: 'Hello Bob' });
+
+  const aliceChats = h.messagesOfType('alice', S2C.CHAT_MESSAGE);
+  const bobChats = h.messagesOfType('bob', S2C.CHAT_MESSAGE);
+  assert.strictEqual(aliceChats.length, 1);
+  assert.strictEqual(bobChats.length, 1);
+  assert.strictEqual(aliceChats[0].message.text, 'Hello Bob');
+  assert.strictEqual(bobChats[0].message.text, 'Hello Bob');
+
+  const history = h.lastMessage('bob');
+  assert.strictEqual(history.type, S2C.CHAT_MESSAGE);
+  assert.strictEqual(history.message.nickname, 'Alice');
+});
+
+test('chat report sends CHAT_ACK to reporter and rejects missing messages', () => {
+  const h = makeHarness();
+  h.setNickname('alice', 'Alice');
+  h.setNickname('bob', 'Bob');
+  const match = h.createAndJoinAsHost('alice', 'Alice', 'standard');
+  h.router.handleMessage('bob', { type: C2S.JOIN_MATCH, matchId: match.id, as: 'player' });
+
+  h.router.handleMessage('alice', { type: C2S.SEND_CHAT, text: 'Hi all' });
+  const chatMessage = h.messagesOfType('bob', S2C.CHAT_MESSAGE).slice(-1)[0];
+  assert(chatMessage, 'Chat message should exist');
+
+  h.router.handleMessage('bob', { type: C2S.REPORT_CHAT, messageId: chatMessage.message.messageId });
+  const ack = h.lastMessage('bob');
+  assert.strictEqual(ack.type, S2C.CHAT_ACK);
+  assert.strictEqual(ack.action, 'report');
+  assert.strictEqual(ack.messageId, chatMessage.message.messageId);
+
+  h.router.handleMessage('bob', { type: C2S.REPORT_CHAT, messageId: 'missing' });
+  const badAck = h.lastMessage('bob');
+  assert.strictEqual(badAck.type, S2C.CHAT_ERROR);
+  assert.strictEqual(badAck.code, 'chat_report_invalid');
+});
+
+test('chat enforces rate limiting per session', () => {
+  const h = makeHarness();
+  h.setNickname('alice', 'Alice');
+  const match = h.createAndJoinAsHost('alice', 'Alice', 'standard');
+
+  h.router.handleMessage('alice', { type: C2S.SEND_CHAT, text: 'one' });
+  h.router.handleMessage('alice', { type: C2S.SEND_CHAT, text: 'two' });
+  h.router.handleMessage('alice', { type: C2S.SEND_CHAT, text: 'three' });
+  h.router.handleMessage('alice', { type: C2S.SEND_CHAT, text: 'four' });
+  h.router.handleMessage('alice', { type: C2S.SEND_CHAT, text: 'five' });
+
+  const last = h.lastMessage('alice');
+  assert.strictEqual(last.type, S2C.CHAT_MESSAGE);
+
+  h.router.handleMessage('alice', { type: C2S.SEND_CHAT, text: 'six' });
+  const error = h.lastMessage('alice');
+  assert.strictEqual(error.type, S2C.CHAT_ERROR);
+  assert.strictEqual(error.code, 'chat_rate_limited');
 });
 
 test('joining a nonexistent match returns MATCH_NOT_FOUND, not a crash', () => {

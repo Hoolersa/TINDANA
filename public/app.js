@@ -75,7 +75,7 @@ let chatAudioContext = null;
 document.getElementById('lang-toggle').addEventListener('click', () => {
   state.lang = state.lang === 'bn' ? 'en' : 'bn';
   localStorage.setItem(LANG_KEY, state.lang);
-  applyLangToChrome();
+  applyLangToChrome(state.lang);
   render();
 });
 

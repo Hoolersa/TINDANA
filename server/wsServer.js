@@ -158,7 +158,15 @@ app.post('/api/matches', (req, res) => {
   if (!session) return;
   const mode = req.body?.mode === 'diagonal' ? 'diagonal' : 'standard';
   const isPrivate = req.body?.private === true || req.body?.private === 'true';
-  const match = matchManager.createMatch(mode, session.sessionId, session.nickname, isPrivate);
+  let match;
+  try {
+    match = matchManager.createMatch(mode, session.sessionId, session.nickname, isPrivate);
+  } catch (e) {
+    if (e.code === 'already_has_active_match') {
+      return res.status(409).json({ error: 'already_has_active_match', message: 'You already have an active match.' });
+    }
+    throw e;
+  }
   wireMatchEvents(match);
   // Register the routing mapping now rather than waiting for the client's
   // follow-up WS JOIN_MATCH - if that message is ever lost in transit, the

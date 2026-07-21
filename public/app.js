@@ -237,6 +237,12 @@ async function createMatch(mode) {
     credentials: 'same-origin',
   });
   const data = await res.json();
+  if (!res.ok) {
+    state.lastError = data.message || data.error || tr('create_match_failed');
+    announce(state.lastError);
+    render();
+    return;
+  }
   state.lastPrivateMatchPassKey = data.passKey || null;
   joinMatch(data.matchId, 'player');
 }
@@ -389,8 +395,8 @@ function renderLobby() {
     <div class="panel">
       <h2>${tr('create_match')}</h2>
       <div class="mode-buttons">
-        <button type="button" data-create="standard">${tr('mode_standard')}</button>
-        <button type="button" data-create="diagonal">${tr('mode_diagonal')}</button>
+        <button type="button" data-create="standard" ${state.snapshot && state.snapshot.status !== 'finished' && state.snapshot.yourSeat && state.snapshot.yourSeat !== 'spectator' ? 'disabled' : ''}>${tr('mode_standard')}</button>
+        <button type="button" data-create="diagonal" ${state.snapshot && state.snapshot.status !== 'finished' && state.snapshot.yourSeat && state.snapshot.yourSeat !== 'spectator' ? 'disabled' : ''}>${tr('mode_diagonal')}</button>
       </div>
       <label class="private-match-toggle">
         <input id="private-match-checkbox" type="checkbox" ${state.createPrivateMatch ? 'checked' : ''}>

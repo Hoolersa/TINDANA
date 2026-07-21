@@ -13,6 +13,11 @@ class MatchManager {
   }
 
   createMatch(mode, hostSessionId, hostNickname, isPrivate = false) {
+    if (this.hasActiveMatch(hostSessionId)) {
+      const err = new Error('Already has an active match');
+      err.code = 'already_has_active_match';
+      throw err;
+    }
     if (mode !== 'standard' && mode !== 'diagonal') {
       throw new Error(`Unknown mode: ${mode}`);
     }
@@ -41,6 +46,19 @@ class MatchManager {
 
   getMatch(matchId) {
     return this.matches.get(matchId) || null;
+  }
+
+  hasActiveMatch(sessionId) {
+    for (const match of this.matches.values()) {
+      if (match.status === 'finished') continue;
+      const seat = match.seatForSession(sessionId);
+      if (!seat) continue;
+      const seatData = match.seats[seat];
+      // A waiting match is only considered active if the player is still connected.
+      if (match.status === 'waiting' && seatData && !seatData.connected) continue;
+      return true;
+    }
+    return false;
   }
 
   /** Join an existing match as a player; throws MatchFullError if both seats taken. */

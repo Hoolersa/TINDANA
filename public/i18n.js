@@ -131,6 +131,8 @@ const I18N = {
     you_label: 'You',
     connection_lost: 'Connection lost — reconnecting',
     server_rejected: 'That move was rejected',
+    create_match_failed: 'Could not create a new match.',
+    already_have_active_match: 'You already have an active match.',
     private_match: 'Private match (hidden from lobby)',
   },
 };

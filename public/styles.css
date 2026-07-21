@@ -526,6 +526,36 @@ body[data-lang="bn"] .app-header .tagline { font-family: var(--font-body-bn); }
 }
 .turn-timer.urgent { color: #ffb199; }
 
+.voice-panel {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.12);
+  margin-bottom: 16px;
+}
+.voice-label {
+  font-weight: 600;
+}
+.voice-btn {
+  border: none;
+  border-radius: 999px;
+  background: var(--turmeric);
+  color: #1c1208;
+  padding: 8px 14px;
+  font-weight: 600;
+}
+.voice-btn:hover {
+  background: var(--turmeric-dim);
+}
+.voice-status {
+  color: var(--on-floor);
+  font-size: 13px;
+}
+
 .status-text {
   text-align: center;
   font-size: 14px;

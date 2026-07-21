@@ -106,6 +106,16 @@ function createMessageRouter({ matchManager, chatManager, broadcastChat, sendToS
         }
         return;
       }
+      case C2S.VOICE_OFFER:
+      case C2S.VOICE_ANSWER:
+      case C2S.VOICE_ICE_CANDIDATE: {
+        const match = matchManager.getMatch(msg.matchId);
+        if (!match) return sendToSession(sessionId, err(ERROR_CODES.MATCH_NOT_FOUND));
+        const otherSessionId = match.otherPlayerSessionId(sessionId);
+        if (!otherSessionId) return;
+        sendToSession(otherSessionId, msg);
+        return;
+      }
       case C2S.REQUEST_REMATCH: {
         const match = matchManager.getMatch(msg.matchId);
         if (!match) return sendToSession(sessionId, err(ERROR_CODES.MATCH_NOT_FOUND));

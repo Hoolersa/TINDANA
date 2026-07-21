@@ -12,6 +12,9 @@ const C2S = {
   DECLINE_REMATCH: 'decline_rematch',
   SEND_CHAT: 'send_chat',
   REPORT_CHAT: 'report_chat',
+  VOICE_OFFER: 'voice_offer',
+  VOICE_ANSWER: 'voice_answer',
+  VOICE_ICE_CANDIDATE: 'voice_ice_candidate',
 };
 const S2C = {
   MATCH_SNAPSHOT: 'match_snapshot',
@@ -27,6 +30,9 @@ const S2C = {
   CHAT_HISTORY: 'chat_history',
   CHAT_ERROR: 'chat_error',
   CHAT_ACK: 'chat_ack',
+  VOICE_OFFER: 'voice_offer',
+  VOICE_ANSWER: 'voice_answer',
+  VOICE_ICE_CANDIDATE: 'voice_ice_candidate',
 };
 
 const LANG_KEY = 'tindana_lang';
@@ -55,6 +61,10 @@ const state = {
   chatError: null,
   chatOpen: false,
   unreadChatCount: 0,
+  voiceStatus: 'idle',
+  voiceMuted: false,
+  peerConnection: null,
+  localStream: null,
   timerIntervalHandle: null,
   lobbyRefreshHandle: null,
 };
@@ -232,6 +242,15 @@ function handleServerMessage(msg) {
       state.rematchDeclinedBy = null;
       send(C2S.REQUEST_SNAPSHOT, { matchId: msg.newMatchId });
       return;
+    case S2C.VOICE_OFFER:
+      handleRemoteVoiceOffer(msg);
+      return;
+    case S2C.VOICE_ANSWER:
+      handleRemoteVoiceAnswer(msg);
+      return;
+    case S2C.VOICE_ICE_CANDIDATE:
+      handleRemoteVoiceIceCandidate(msg);
+      return;
     default:
       return;
   }
@@ -311,6 +330,7 @@ function leaveMatch() {
   state.rematchDeclinedBy = null;
   localStorage.removeItem(MATCH_KEY);
   state.view = 'lobby';
+  stopVoiceChat();
   refreshLobbyOnce().then(render);
 }
 
@@ -502,6 +522,7 @@ function renderLobby() {
     });
   });
   attachChatWidgetHandlers();
+  attachVoiceHandlers();
   startLobbyAutoRefresh();
 }
 
@@ -610,6 +631,7 @@ function renderMatch() {
     </div>
     <div class="status-text" id="status-text">${statusText(snap)}</div>
     ${resultBannerHTML(snap)}
+    ${renderVoiceControls(snap)}
     ${state.rematchDeclinedBy ? `<div class="rematch-notice">${tr('rematch_declined_by', { name: state.rematchDeclinedBy })}</div>` : ''}
     ${state.rematchProposalBy ? `
       <div class="rematch-proposal">
@@ -661,7 +683,186 @@ function renderMatch() {
   if (grid) grid.addEventListener('keydown', handleBoardArrowNav);
 
   attachChatWidgetHandlers();
+  attachVoiceHandlers();
   startOrRefreshTimerLoop(snap);
+}
+
+function renderVoiceControls(snap) {
+  if (!snap || !snap.yourSeat || snap.yourSeat === 'spectator') return '';
+  const hasOpponent = !!snap.players.A && !!snap.players.B;
+  const statusText = state.voiceStatus === 'idle'
+    ? (hasOpponent ? tr('voice_ready') : tr('voice_waiting_for_opponent'))
+    : tr(state.voiceStatus);
+  const button = state.voiceStatus === 'connected' || state.voiceStatus === 'connecting'
+    ? `<button type="button" class="voice-btn" id="voice-toggle">${state.voiceMuted ? tr('voice_unmute') : tr('voice_mute')}</button>`
+    : `<button type="button" class="voice-btn" id="voice-start">${tr('voice_enable')}</button>`;
+  return `
+    <div class="voice-panel">
+      <span class="voice-label">${tr('voice_chat')}</span>
+      ${button}
+      <span class="voice-status">${statusText}</span>
+    </div>
+  `;
+}
+
+function attachVoiceHandlers() {
+  const startBtn = document.getElementById('voice-start');
+  if (startBtn) startBtn.addEventListener('click', startVoiceChat);
+  const toggleBtn = document.getElementById('voice-toggle');
+  if (toggleBtn) toggleBtn.addEventListener('click', toggleVoiceMute);
+}
+
+function ensureRemoteAudioEl() {
+  let audio = document.getElementById('remote-voice-audio');
+  if (!audio) {
+    audio = document.createElement('audio');
+    audio.id = 'remote-voice-audio';
+    audio.autoplay = true;
+    audio.style.display = 'none';
+    document.body.appendChild(audio);
+  }
+  return audio;
+}
+
+function closeVoiceChat() {
+  if (state.peerConnection) {
+    state.peerConnection.close();
+    state.peerConnection = null;
+  }
+  if (state.localStream) {
+    state.localStream.getTracks().forEach((track) => track.stop());
+    state.localStream = null;
+  }
+  state.voiceStatus = 'idle';
+  state.voiceMuted = false;
+  const audio = document.getElementById('remote-voice-audio');
+  if (audio) audio.srcObject = null;
+}
+
+function stopVoiceChat() {
+  closeVoiceChat();
+}
+
+async function createPeerConnection() {
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  });
+  pc.addEventListener('icecandidate', (event) => {
+    if (!event.candidate || !state.currentMatchId) return;
+    send(C2S.VOICE_ICE_CANDIDATE, {
+      matchId: state.currentMatchId,
+      candidate: event.candidate,
+    });
+  });
+  pc.addEventListener('track', (event) => {
+    const audio = ensureRemoteAudioEl();
+    audio.srcObject = event.streams[0];
+  });
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    state.localStream = stream;
+    stream.getAudioTracks().forEach((track) => pc.addTrack(track, stream));
+    updateVoiceMuteState();
+  } catch (err) {
+    state.voiceStatus = 'voice_error';
+    state.voiceMuted = true;
+    render();
+    return null;
+  }
+  state.peerConnection = pc;
+  return pc;
+}
+
+function updateVoiceMuteState() {
+  if (!state.localStream) return;
+  state.localStream.getAudioTracks().forEach((track) => {
+    track.enabled = !state.voiceMuted;
+  });
+}
+
+async function startVoiceChat() {
+  if (state.peerConnection) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    state.voiceStatus = 'voice_no_mic';
+    render();
+    return;
+  }
+
+  state.voiceStatus = 'voice_connecting';
+  render();
+
+  const pc = await createPeerConnection();
+  if (!pc) return;
+
+  const snap = state.snapshot;
+  if (!snap || !snap.yourSeat || snap.yourSeat === 'spectator' || !state.currentMatchId) {
+    state.voiceStatus = 'voice_not_ready';
+    render();
+    return;
+  }
+
+  if (snap.yourSeat === 'A') {
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      send(C2S.VOICE_OFFER, { matchId: state.currentMatchId, sdp: offer });
+    } catch (err) {
+      state.voiceStatus = 'voice_error';
+      render();
+      return;
+    }
+  }
+
+  // Wait for the remote peer to answer before marking the connection fully connected.
+  state.voiceStatus = 'voice_connecting';
+  render();
+}
+
+async function handleRemoteVoiceOffer(msg) {
+  if (!state.currentMatchId || msg.matchId !== state.currentMatchId) return;
+  if (!state.peerConnection) {
+    await createPeerConnection();
+  }
+  if (!state.peerConnection) return;
+  try {
+    await state.peerConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    const answer = await state.peerConnection.createAnswer();
+    await state.peerConnection.setLocalDescription(answer);
+    send(C2S.VOICE_ANSWER, { matchId: state.currentMatchId, sdp: answer });
+    state.voiceStatus = 'voice_connected';
+    render();
+  } catch (err) {
+    state.voiceStatus = 'voice_error';
+    render();
+  }
+}
+
+async function handleRemoteVoiceAnswer(msg) {
+  if (!state.peerConnection) return;
+  try {
+    await state.peerConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    state.voiceStatus = 'voice_connected';
+    render();
+  } catch (err) {
+    state.voiceStatus = 'voice_error';
+    render();
+  }
+}
+
+async function handleRemoteVoiceIceCandidate(msg) {
+  if (!state.peerConnection || !msg.candidate) return;
+  try {
+    await state.peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+  } catch (err) {
+    // ignore bad candidate
+  }
+}
+
+function toggleVoiceMute() {
+  state.voiceMuted = !state.voiceMuted;
+  updateVoiceMuteState();
+  render();
 }
 
 /* Simple 3x3 spatial arrow-key navigation between board point buttons. */

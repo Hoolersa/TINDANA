@@ -11,6 +11,9 @@ const C2S = Object.freeze({
   DECLINE_REMATCH: 'decline_rematch', // { matchId }
   SEND_CHAT: 'send_chat', // { text }
   REPORT_CHAT: 'report_chat', // { messageId }
+  VOICE_OFFER: 'voice_offer', // { matchId, sdp }
+  VOICE_ANSWER: 'voice_answer', // { matchId, sdp }
+  VOICE_ICE_CANDIDATE: 'voice_ice_candidate', // { matchId, candidate }
 });
 
 /** Server -> Client message types */
@@ -28,6 +31,9 @@ const S2C = Object.freeze({
   CHAT_HISTORY: 'chat_history', // { messages: [...] }
   CHAT_ERROR: 'chat_error', // { code, message }
   CHAT_ACK: 'chat_ack', // { action, messageId }
+  VOICE_OFFER: 'voice_offer', // { matchId, sdp }
+  VOICE_ANSWER: 'voice_answer', // { matchId, sdp }
+  VOICE_ICE_CANDIDATE: 'voice_ice_candidate', // { matchId, candidate }
 });
 
 /** Turn durations, per spec: 15s for placement, 30s for movement. */

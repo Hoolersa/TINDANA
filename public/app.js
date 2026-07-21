@@ -53,29 +53,14 @@ const state = {
   chatMessages: [],
   chatDraft: '',
   chatError: null,
+  chatOpen: false,
+  unreadChatCount: 0,
   timerIntervalHandle: null,
+  lobbyRefreshHandle: null,
 };
 
 const root = document.getElementById('view-root');
-const liveRegion = document.getElementById('live-region');
-
-function tr(key, vars) { return t(state.lang, key, vars); }
-
-function announce(text) {
-  liveRegion.textContent = '';
-  // Re-set on next tick so repeated identical announcements still fire.
-  requestAnimationFrame(() => { liveRegion.textContent = text; });
-}
-
-function applyLangToChrome() {
-  document.documentElement.lang = state.lang;
-  document.body.dataset.lang = state.lang;
-  document.getElementById('app-title').textContent = tr('game_title');
-  document.getElementById('app-tagline').textContent = tr('tagline');
-  document.getElementById('lang-toggle').textContent = tr('lang_toggle');
-  const nickEl = document.getElementById('nickname-display');
-  nickEl.textContent = state.nickname ? `${tr('you_label')}: ${state.nickname}` : '';
-}
+let chatAudioContext = null;
 
 document.getElementById('lang-toggle').addEventListener('click', () => {
   state.lang = state.lang === 'bn' ? 'en' : 'bn';
@@ -151,6 +136,32 @@ function reportChat(messageId) {
   }
 }
 
+function playChatSound() {
+  if (typeof window.AudioContext === 'undefined' && typeof window.webkitAudioContext === 'undefined') return;
+  try {
+    if (!chatAudioContext) {
+      const ctor = window.AudioContext || window.webkitAudioContext;
+      chatAudioContext = new ctor();
+    }
+    if (chatAudioContext.state === 'suspended') {
+      chatAudioContext.resume().catch(() => {});
+    }
+    const oscillator = chatAudioContext.createOscillator();
+    const gain = chatAudioContext.createGain();
+    oscillator.type = 'sine';
+    oscillator.frequency.value = 880;
+    gain.gain.value = 0.12;
+    oscillator.connect(gain);
+    gain.connect(chatAudioContext.destination);
+    oscillator.start();
+    oscillator.stop(chatAudioContext.currentTime + 0.08);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      gain.disconnect();
+    };
+  } catch (_) {}
+}
+
 function handleServerMessage(msg) {
   switch (msg.type) {
     case S2C.LOBBY_UPDATE:
@@ -159,10 +170,17 @@ function handleServerMessage(msg) {
       return;
     case S2C.CHAT_HISTORY:
       state.chatMessages = msg.messages || [];
-      if (state.view !== 'gate') render();
+      if (state.view !== 'gate') {
+        state.unreadChatCount = 0;
+        render();
+      }
       return;
     case S2C.CHAT_MESSAGE:
       state.chatMessages = [...state.chatMessages, msg.message];
+      if (msg.message.nickname !== state.nickname) {
+        if (!state.chatOpen) state.unreadChatCount += 1;
+        playChatSound();
+      }
       if (state.view !== 'gate') render();
       return;
     case S2C.CHAT_ERROR:
@@ -225,6 +243,21 @@ async function refreshLobbyOnce() {
   state.lobbyMatches = data.matches;
 }
 
+function startLobbyAutoRefresh() {
+  if (state.lobbyRefreshHandle) return;
+  state.lobbyRefreshHandle = setInterval(async () => {
+    if (state.view !== 'lobby') return;
+    await refreshLobbyOnce();
+    render();
+  }, 10000);
+}
+
+function stopLobbyAutoRefresh() {
+  if (!state.lobbyRefreshHandle) return;
+  clearInterval(state.lobbyRefreshHandle);
+  state.lobbyRefreshHandle = null;
+}
+
 // ---------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------
@@ -244,6 +277,8 @@ async function createMatch(mode) {
     return;
   }
   state.lastPrivateMatchPassKey = data.passKey || null;
+  await refreshLobbyOnce();
+  render();
   joinMatch(data.matchId, 'player');
 }
 
@@ -339,6 +374,7 @@ function render() {
 }
 
 function renderGate() {
+  stopLobbyAutoRefresh();
   root.innerHTML = `
     <div class="panel gate">
       <h2>${tr('nickname_label')}</h2>
@@ -427,8 +463,8 @@ function renderLobby() {
           <div class="match-list">${finished.length ? finished.map(matchCard).join('') : `<div class="empty-note">${tr('no_matches')}</div>`}</div>
         </div>
       </div>
-      ${renderChatPanel()}
     </div>
+    ${renderChatWidget()}
   `;
 
   root.querySelectorAll('[data-create]').forEach((btn) => {
@@ -465,7 +501,8 @@ function renderLobby() {
       }
     });
   });
-  attachChatHandlers();
+  attachChatWidgetHandlers();
+  startLobbyAutoRefresh();
 }
 
 function beadInnerHTML(owner) {
@@ -542,6 +579,7 @@ function resultBannerHTML(snap) {
 }
 
 function renderMatch() {
+  stopLobbyAutoRefresh();
   const snap = state.snapshot;
   if (!snap) {
     root.innerHTML = `<div class="panel">${tr('reconnecting')}</div>`;
@@ -580,7 +618,7 @@ function renderMatch() {
         <button type="button" class="decline-rematch-btn" id="decline-rematch-btn">${tr('rematch_decline')}</button>
       </div>` : ''}
     <div class="board-wrap">${renderBoardHTML(snap)}</div>
-    ${renderChatPanel()}
+    ${renderChatWidget()}
     ${isFinished && isPlayer ? `
       <div class="action-row">
         <button type="button" class="rematch-btn" id="rematch-btn">${tr('request_rematch')}</button>
@@ -622,7 +660,7 @@ function renderMatch() {
   const grid = document.getElementById('board-grid');
   if (grid) grid.addEventListener('keydown', handleBoardArrowNav);
 
-  attachChatHandlers();
+  attachChatWidgetHandlers();
   startOrRefreshTimerLoop(snap);
 }
 
@@ -676,6 +714,29 @@ function startOrRefreshTimerLoop(snap) {
 // Boot
 // ---------------------------------------------------------------------
 
+function renderChatWidget() {
+  if (state.view === 'gate') return '';
+  const badge = state.unreadChatCount > 0
+    ? `<span class="chat-badge" aria-hidden="true">${state.unreadChatCount}</span>`
+    : '';
+
+  if (!state.chatOpen) {
+    return `
+      <div class="chat-widget collapsed" id="chat-widget">
+        <button type="button" class="chat-toggle" id="chat-toggle" aria-label="${tr('open_chat')}">
+          ${tr('global_chat')} ${badge}
+        </button>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="chat-widget open" id="chat-widget">
+      ${renderChatPanel()}
+    </div>
+  `;
+}
+
 function renderChatPanel() {
   const rows = state.chatMessages.map((message) => `
       <div class="chat-message">
@@ -688,8 +749,11 @@ function renderChatPanel() {
   return `
     <div class="panel chat-panel">
       <div class="chat-header">
-        <h3>${tr('global_chat')}</h3>
-        <span class="chat-caption">${tr('chat_help')}</span>
+        <div class="chat-title">
+          <h3>${tr('global_chat')}</h3>
+          <span class="chat-caption">${tr('chat_help')}</span>
+        </div>
+        <button type="button" class="chat-close" id="chat-minimize" aria-label="${tr('minimize_chat')}">×</button>
       </div>
       <div class="chat-history" id="chat-history">${rows || `<div class="empty-note">${tr('no_chat_messages')}</div>`}</div>
       <form id="chat-form" class="chat-form">
@@ -705,26 +769,47 @@ function renderChatPanel() {
 function attachChatHandlers() {
   const form = document.getElementById('chat-form');
   const input = document.getElementById('chat-input');
-  if (!form || !input) return;
+  if (form && input) {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      sendChat(text);
+      state.chatDraft = '';
+      input.value = '';
+    });
 
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const text = input.value.trim();
-    if (!text) return;
-    sendChat(text);
-    state.chatDraft = '';
-    input.value = '';
-  });
-
-  input.addEventListener('input', () => {
-    state.chatDraft = input.value;
-  });
+    input.addEventListener('input', () => {
+      state.chatDraft = input.value;
+    });
+  }
 
   document.querySelectorAll('.chat-report').forEach((btn) => {
     btn.addEventListener('click', () => {
       reportChat(btn.dataset.messageId);
     });
   });
+}
+
+function attachChatWidgetHandlers() {
+  const toggle = document.getElementById('chat-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      state.chatOpen = true;
+      state.unreadChatCount = 0;
+      render();
+    });
+  }
+
+  const minimize = document.getElementById('chat-minimize');
+  if (minimize) {
+    minimize.addEventListener('click', () => {
+      state.chatOpen = false;
+      render();
+    });
+  }
+
+  attachChatHandlers();
 }
 
 function escapeHtml(str) {

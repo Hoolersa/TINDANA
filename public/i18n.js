@@ -155,3 +155,22 @@ function t(lang, key, vars) {
   }
   return str;
 }
+
+function tr(key, vars) {
+  const lang = document.body.dataset.lang || document.documentElement.lang || 'bn';
+  return t(lang, key, vars);
+}
+
+function applyLangToChrome(lang = document.body.dataset.lang || 'bn') {
+  document.documentElement.lang = lang;
+  document.body.dataset.lang = lang;
+
+  const title = document.getElementById('app-title');
+  if (title) title.textContent = t(lang, 'game_title');
+
+  const subtitle = document.getElementById('app-tagline');
+  if (subtitle) subtitle.textContent = t(lang, 'tagline');
+
+  const toggle = document.getElementById('lang-toggle');
+  if (toggle) toggle.textContent = t(lang, 'lang_toggle');
+}
